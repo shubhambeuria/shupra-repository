@@ -1,0 +1,154 @@
+! Microsoft Corporation
+! ------------------------------------------------------------------------------
+! Sample VPN tunnel configuration template for Cisco IOS-based devices
+!
+! ##############################################################################
+! !!! Search for "REPLACE" to find the values that require special
+! !!! considerations
+! !!!
+! !!! (1) ACL/access-list rule numbers
+! !!! (2) Tunnel interface number
+! !!! (3) Tunnel interface IP address
+! !!! (4) BGP routes to advertise (if BGP is enabled)
+! !!! (5) BGP peer IP address on the device - loopback interface number
+! ##############################################################################
+!
+! [0] Device infomration
+!
+!   > Device vendor:    Cisco
+!   > Device family:    IOS-based (ASR, ISR)
+!   > Firmware version: IOS 15.1 or beyond
+!   > Test platform:    Cisco ISR 2911, version 15.2
+!
+! [1] Network parameters
+!
+!   > Connection name:       onprem-to-azure-s2s
+!   > VPN Gateway name:      6ac20078-f719-4a7c-897f-a8ed9feef1ba
+!   > Public IP addresses:   
+!     + Public IP 1:         52.138.87.118
+!   > Virtual network address space: 
+!     + CIDR: 10.0.0.0/16
+!       - Prefix:   10.0.0.0
+!       - Netmask:  255.255.0.0
+!       - Wildcard: 0.0.255.255
+!   > Local network gateway: s2s-local-nw-gwy
+!   > On-premises VPN IP:    203.59.187.18
+!   > On-premises address prefixes: 
+!     + CIDR: 192.168.1.0/24
+!       - Prefix:   192.168.1.0
+!       - Netmask:  255.255.255.0
+!       - Wildcard: 0.0.0.255
+!
+! [2] IPsec/IKE parameters
+!
+!   > IKE version:             IKEv2
+!     + Encryption algorithm:  aes-cbc-256
+!     + Integrityalgorithm:    sha1
+!     + Diffie-Hellman group:  2
+!     + SA lifetime (seconds): 3600
+!     + Pre-shared key:        .$/<hV}0]%0O
+!     + UsePolicyBasedTS:      False
+!
+!   > IPsec
+!     + Encryption algorithm:  esp-gcm 256
+!     + Integrity algorithm:   
+!     + PFS Group:             none
+!     + SA lifetime (seconds): 3600
+!
+! [3] BGP parameters - Azure VPN gateway
+!
+!   > Azure virtual network
+!     + Enable BGP:            False
+!     + Azure BGP ASN:         VNG_ASN
+!   > On-premises network / LNG
+!     + On premises BGP ASN:   LNG_ASN
+!     + On premises BGP IP:    LNG_BGPIP
+!
+! ------------------------------------------------------------------------------
+! ACL rules
+! 
+! Some VPN devices require explicit ACL rules to allow cross-premises traffic:
+!
+! 1. Allow traffic between on premises address ranges and VNet address ranges
+! 2. Allow IKE traffic (UDP:500) between on premises VPN devices and Azure VPN gateway
+! 3. Allow IPsec traffic (Proto:ESP) between on premises VPN devices and Azure VPN gateway
+
+access-list 101 permit ip 192.168.1.0 0.0.0.255 10.0.0.0 0.0.255.255
+
+! ==============================================================================
+! Internet Key Exchange (IKE) configuration
+! - IKE Phase 1 / Main mode configuration
+! - Encryption/integrity algorithms, Diffie-Hellman group, pre-shared key
+
+crypto ikev2 proposal onprem-to-azure-s2s-proposal
+  encryption aes-cbc-256
+  integrity  sha1
+  group      2
+  exit
+
+crypto ikev2 policy onprem-to-azure-s2s-policy
+  proposal onprem-to-azure-s2s-proposal
+  match address local 203.59.187.18
+  exit
+  
+crypto ikev2 keyring onprem-to-azure-s2s-keyring
+  peer 52.138.87.118
+    address 52.138.87.118
+    pre-shared-key .$/<hV}0]%0O
+    exit
+  exit
+
+crypto ikev2 profile onprem-to-azure-s2s-profile
+  match address  local 203.59.187.18
+  match identity remote address 52.138.87.118 255.255.255.255
+  authentication remote pre-share
+  authentication local  pre-share
+  lifetime       3600
+  keyring local  onprem-to-azure-s2s-keyring
+  exit
+
+! ------------------------------------------------------------------------------
+! IPsec configuration
+! - IPsec (or IKE Phase 2 / Quick Mode) configuration
+! - Transform Set: IPsec encryption/integrity algorithms, IPsec ESP mode
+
+crypto ipsec transform-set onprem-to-azure-s2s-TransformSet esp-gcm 256 
+  mode tunnel
+  exit
+
+crypto ipsec profile onprem-to-azure-s2s-IPsecProfile
+  set transform-set  onprem-to-azure-s2s-TransformSet
+  set ikev2-profile  onprem-to-azure-s2s-profile
+  set security-association lifetime seconds 3600
+  exit
+
+! ------------------------------------------------------------------------------
+! Tunnel interface (VTI) configuration
+! - Create/configure a tunnel interface
+! - Configure an APIPA (169.254.x.x) address that does NOT overlap with any
+!   other address on this device. This is not visible from the Azure gateway.
+! * REPLACE: Tunnel interface number and APIPA IP address below
+! * In active-active configuration, there will be two tunnel interfaces below
+
+int tunnel 11
+  ip address 169.254.0.1 255.255.255.252
+  tunnel mode ipsec ipv4
+  ip tcp adjust-mss 1350
+  tunnel source 203.59.187.18
+  tunnel destination 52.138.87.118
+  tunnel protection ipsec profile onprem-to-azure-s2s-IPsecProfile
+  exit
+
+! ------------------------------------------------------------------------------
+! BGP configuration
+! - BGP configuration if enabled for the connection
+! * REPLACE: Loopback interface number(s)
+! * REPLACE: Local routes and netmasks to advertise - LOCAL_ROUTE and LOCAL_MASK
+
+
+! ------------------------------------------------------------------------------
+! Static routes
+! - Adding the static routes to point the VNet prefixes to the IPsec tunnels
+! * REPLACE: Tunnel interface number(s)
+
+ip route 10.0.0.0 255.255.0.0 Tunnel 11
